@@ -47,6 +47,21 @@ type FormState = {
   emailOptIn: boolean;
 };
 
+type SignupApiResponse = {
+  message?: string;
+  fieldErrors?: Partial<
+    Record<
+      | 'user_id'
+      | 'phone'
+      | 'email'
+      | 'privacy_agreed'
+      | 'terms_agreed'
+      | 'form',
+      string
+    >
+  >;
+};
+
 const initialForm: FormState = {
   userId: '',
   phone: '',
@@ -56,8 +71,6 @@ const initialForm: FormState = {
   smsOptIn: true,
   emailOptIn: true,
 };
-
-const existingIds = new Set(['beauty123', 'naum2026', 'welcome']);
 
 const coupons = [
   {
@@ -101,8 +114,6 @@ function validateForm(form: FormState) {
 
   if (!form.userId.trim()) {
     errors.userId = '아이디를 입력해주세요.';
-  } else if (existingIds.has(form.userId.trim().toLowerCase())) {
-    errors.userId = '이미 가입된 아이디입니다. 다른 아이디를 입력해주세요.';
   }
 
   if (!phoneDigits) {
@@ -128,11 +139,33 @@ function validateForm(form: FormState) {
   return errors;
 }
 
+function mapApiFieldErrors(response: SignupApiResponse | null) {
+  const fieldErrors = response?.fieldErrors;
+
+  if (!fieldErrors) {
+    return {
+      form:
+        response?.message ??
+        '회원가입 정보를 저장하지 못했습니다. 잠시 후 다시 시도해주세요.',
+    };
+  }
+
+  return {
+    userId: fieldErrors.user_id,
+    phone: fieldErrors.phone,
+    email: fieldErrors.email,
+    privacy: fieldErrors.privacy_agreed,
+    terms: fieldErrors.terms_agreed,
+    form: fieldErrors.form ?? response?.message,
+  };
+}
+
 export default function Home() {
   const [form, setForm] = useState<FormState>(initialForm);
   const [errors, setErrors] = useState<Partial<Record<FieldName, string>>>({});
   const [completed, setCompleted] = useState(false);
   const [isClosed, setIsClosed] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -154,7 +187,7 @@ export default function Home() {
     setErrors((current) => ({ ...current, [key]: undefined, form: undefined }));
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const nextErrors = validateForm(form);
     setErrors(nextErrors);
@@ -163,8 +196,42 @@ export default function Home() {
       return;
     }
 
-    setCompleted(true);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch('/api/signups', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          user_id: form.userId.trim(),
+          phone: form.phone.trim(),
+          email: form.email.trim(),
+          privacy_agreed: form.privacy,
+          terms_agreed: form.terms,
+          sms_marketing_agreed: form.smsOptIn,
+          email_marketing_agreed: form.emailOptIn,
+        }),
+      });
+      const result = (await response
+        .json()
+        .catch(() => null)) as SignupApiResponse | null;
+
+      if (!response.ok) {
+        setErrors(mapApiFieldErrors(result));
+        return;
+      }
+
+      setCompleted(true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch {
+      setErrors({
+        form: '저장 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (isClosed) {
@@ -290,6 +357,7 @@ export default function Home() {
                   aria-invalid={Boolean(errors.userId)}
                   autoComplete="username"
                   className="h-11 border-[#cfc7b8] bg-[#fbfaf7]"
+                  disabled={isSubmitting}
                   id="userId"
                   onChange={(event) =>
                     updateField('userId', event.target.value)
@@ -305,6 +373,7 @@ export default function Home() {
                   aria-invalid={Boolean(errors.phone)}
                   autoComplete="tel"
                   className="h-11 border-[#cfc7b8] bg-[#fbfaf7]"
+                  disabled={isSubmitting}
                   id="phone"
                   inputMode="tel"
                   onChange={(event) => updateField('phone', event.target.value)}
@@ -319,6 +388,7 @@ export default function Home() {
                   aria-invalid={Boolean(errors.email)}
                   autoComplete="email"
                   className="h-11 border-[#cfc7b8] bg-[#fbfaf7]"
+                  disabled={isSubmitting}
                   id="email"
                   onChange={(event) => updateField('email', event.target.value)}
                   placeholder="name@example.com"
@@ -334,6 +404,7 @@ export default function Home() {
                 error={errors.privacy}
                 id="privacy"
                 label="개인정보 처리방침에 동의합니다."
+                disabled={isSubmitting}
                 onChange={(checked) => updateField('privacy', checked)}
                 required
               />
@@ -342,6 +413,7 @@ export default function Home() {
                 error={errors.terms}
                 id="terms"
                 label="이용약관에 동의합니다."
+                disabled={isSubmitting}
                 onChange={(checked) => updateField('terms', checked)}
                 required
               />
@@ -353,12 +425,14 @@ export default function Home() {
                   checked={form.smsOptIn}
                   id="smsOptIn"
                   label="문자(SMS/LMS)로 받겠습니다."
+                  disabled={isSubmitting}
                   onChange={(checked) => updateField('smsOptIn', checked)}
                 />
                 <AgreementRow
                   checked={form.emailOptIn}
                   id="emailOptIn"
                   label="이메일로 받겠습니다."
+                  disabled={isSubmitting}
                   onChange={(checked) => updateField('emailOptIn', checked)}
                 />
                 <p className="mt-3 text-sm leading-6 text-[#69756f]">
@@ -372,11 +446,13 @@ export default function Home() {
             ) : null}
 
             <Button
+              aria-busy={isSubmitting}
               className="mt-6 h-12 w-full rounded-lg bg-[#193c34] text-base text-white hover:bg-[#244b42]"
+              disabled={isSubmitting}
               type="submit"
             >
               <Gift className="size-5" />
-              회원가입하고 쿠폰 받기
+              {isSubmitting ? '쿠폰 발급 중...' : '회원가입하고 쿠폰 받기'}
               <ChevronRight className="size-5" />
             </Button>
           </form>
@@ -501,6 +577,7 @@ function FormField({
 
 function AgreementRow({
   checked,
+  disabled,
   error,
   id,
   label,
@@ -508,6 +585,7 @@ function AgreementRow({
   required,
 }: {
   checked: boolean;
+  disabled?: boolean;
   error?: string;
   id: string;
   label: string;
@@ -522,6 +600,7 @@ function AgreementRow({
           aria-invalid={Boolean(error)}
           checked={checked}
           className="mt-0.5"
+          disabled={disabled}
           id={id}
           onCheckedChange={(value) => onChange(value === true)}
         />
